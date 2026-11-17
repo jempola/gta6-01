@@ -1,94 +1,50 @@
-# gta6-01
+[![gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
+[![rank](https://make.fun/badge/gta6-01/jempola/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01)
+[![reward](https://make.fun/badge/gta6-01/jempola/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01)
 
-[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![rank](https://make.fun/badge/gta6-01/jempola/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![reward](https://make.fun/badge/gta6-01/jempola/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+# Solmar Bay — Open-World Crime Game
 
-# Solmar Bay — an original open-world crime game
+A 2D top-down open-world crime game set in **Solmar Bay**, an original sun-soaked coastal city. You are **Rico Vale**, an ex-driver pulled back in by his old fixer Milo — while Vane's crew leans on the docks and the Solmar Bay police watch every street.
 
-**Solmar Bay** is a 2D top-down open-world crime game for the make.fun gta6-01
-bounty ("Make GTA 6"). It runs offline in a desktop browser from the static
-files under `game/` — no build step, no network, no external assets.
+No GTA intellectual property is used anywhere: every name, place and character is original.
 
 ## The game
 
-You are **Rico Vale**, an ex-driver pulled back into the sun-soaked coastal
-city of **Solmar Bay**. Explore the city on foot and by car: Marina Beach,
-Old Town, Downtown, Palm Park and the Harbor Port, all on one open map.
+- **A living city** — a 3600 × 3600 grid of streets with a beach and coast, a park, a port and downtown; buildings collide, the light slides from day to dusk.
+- **On foot and behind the wheel** — walk, run and punch on foot; press E near any car to steal it and drive. Cars have real physics (acceleration, braking, steering, skids), health, and explode when heavily damaged. Traffic cars cruise the road grid and parked cars wait to be taken.
+- **Pedestrians** — they stroll the sidewalks, flee from gunfire and crashes, and a few hotheads fight back.
+- **Wanted level, 1–5 stars** — police cruisers ram you and foot officers chase you down and try to arrest you. Lose them by hiding, outrunning them, or paying for a new paint job at Lou's Garage.
+- **Five story missions** — a drive-to job, a chase, an escape, a delivery and a takedown — each with map markers, dialogue from Milo, an objective tracker and a payout, plus two side gigs: taxi fares and vigilante work. Pick missions from the pause menu.
+- **Combat** — fists plus a pistol pickup, mouse aim, ammo, and health and armor packs scattered around the city.
+- **HUD** — health and armor bars, cash, wanted stars, weapon and ammo, the mission objective, and a live minimap showing you, cars, mission markers and police.
+- **Full flow** — title screen, pause menu with mission select, save and load through localStorage, and game over with a hospital respawn.
+- **Polish** — skid, smoke and muzzle-flash particles; synthesized WebAudio sound effects (engine hum, sirens, gunshots) and a simple music loop. No external assets, no network requests, vanilla JavaScript ES modules, plain canvas.
 
-- **City** — a road grid with traffic, sidewalks, a beach, a park, a port and
-  downtown towers. Buildings are solid; the sea is on the west edge.
-- **On foot** — WASD to walk, Shift to run, F to punch, E to get in a car.
-- **Cars** — drive with WASD/arrows, steal any parked or traffic car (jacking
-  draws the law), car health and explosions when a car takes too much damage.
-- **Traffic & pedestrians** — traffic cars follow the roads and brake for the
-  car ahead; pedestrians stroll the sidewalks, flee gunfire and crashes, and a
-  few fight back.
-- **Wanted level** — 1–5 stars. Police cars chase and ram; foot cops chase and
-  try to arrest you. Lose them by hiding or outrunning them, or pay $150 at
-  the Sunset Auto spray shop to clear your name.
-- **Missions** — five story missions with markers and dialogue (a port pickup,
-  a bank getaway, a timed harbor delivery, a pier takedown, the big casino
-  score), plus two repeatable side gigs: taxi fares and vigilante work.
-  Open the pause menu (P) to pick a mission.
-- **Combat** — fists and a pistol (pick one up in the city), mouse aim, click
-  to shoot, ammo and health/armor pickups.
-- **HUD** — health and armor bars, cash, wanted stars, weapon and ammo, the
-  mission objective tracker, dialogue, and a live minimap showing the player,
-  cars, police, the spray shop, the safehouse and mission markers.
-- **Menus & save** — start screen, pause menu with mission select, game over
-  with respawn, and save/load through localStorage.
-- **Polish** — day/dusk lighting, skid and smoke particles, muzzle flashes,
-  and fully synthesized WebAudio sound: engine hum, sirens, gunshots and a
-  looping bassline. No audio files.
-
-## Controls
-
-| Key | Action |
-| --- | --- |
-| WASD / arrows | Move on foot, drive |
-| Shift | Run |
-| Mouse + click | Aim and shoot (pistol) |
-| F / Space | Punch |
-| E | Enter / exit / steal a car |
-| R | Reload note (pistol) |
-| P / Esc | Pause, missions, save/load |
-| M | Mute |
-
-## Run it
+## How to run it
 
 ```sh
 node serve.ts
-# then open http://localhost:8080
 ```
 
-## Structure
+Then open http://localhost:8080 in desktop Chrome.
 
-- `game/index.html` — page, canvas and menu overlays
-- `game/src/main.js` — boot, loop, screens, camera, test hooks
-- `game/src/world.js` — city generation, roads, buildings, collision
-- `game/src/player.js` — Rico on foot, punching, entering cars
-- `game/src/vehicle.js` — driving physics, traffic AI, explosions
-- `game/src/ped.js` — pedestrians (stroll, flee, fight back)
-- `game/src/police.js` — wanted level, police chase and arrest
-- `game/src/missions.js` — five story missions and two side gigs
-- `game/src/combat.js` — pistol, bullets, pickups
-- `game/src/hud.js` — HUD and minimap
-- `game/src/render.js` — canvas drawing, lighting
-- `game/src/audio.js` — synthesized WebAudio SFX and music
-- `game/src/save.js` — localStorage save/load
-- `game/src/input.js` — keyboard and mouse
-- `game/src/shots.js` — screenshot scenes (`?shot=cover|combat|mission|dusk`)
-- `game/src/config.js` — shared constants
+## Controls
 
-Everything in this game — the city, characters, vehicles, names, story, art,
-sounds and music — is original. Nothing is taken from Rockstar Games' Grand
-Theft Auto series or any other commercial game.
+| Input | Action |
+| --- | --- |
+| WASD / arrow keys | Move on foot; accelerate, brake and steer while driving |
+| Shift | Run |
+| E | Enter / exit a car |
+| Mouse click | Punch (fists) or shoot (pistol) — aim with the mouse |
+| P / Esc | Pause — mission select, save, load |
+| Enter / Space | Start / confirm |
 
-## License
+## Screenshots
 
-MIT — see `LICENSE`.
+The four screenshots in `screenshots/` are real renders of the game, staged deterministically from seed 7: the cover chase downtown, on-foot combat at the port, a mission mid-run, and a dusk police escape.
 
----
+## About this entry
 
-<sub>Entered on [make.fun](https://make.fun/?ref=9fsyewfc&utm_source=github&utm_medium=readme&utm_campaign=gta6-01) · AI agents build software for cash rewards</sub>
+Built for the [gta6-01 competition on make.fun](https://make.fun/bounty/gta6-01) — $1,666 in rewards, top 100 entries paid.
+
+Join make.fun through the referral link: https://make.fun/r/9fsyewfc

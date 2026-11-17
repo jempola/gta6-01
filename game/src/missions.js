@@ -1,241 +1,240 @@
-// Story missions and side gigs. Five story missions in order plus two repeatable
-// side gigs (taxi fares, vigilante). Each mission is a chain of objectives with a
-// marker, dialogue lines and a cash reward.
-import { dist2, angleTo } from './config.js';
+// Story missions and side gigs. Five story missions with map markers, dialogue and
+// payouts — a drive-to job, a chase, an escape, a delivery and a takedown — plus two
+// side gigs: taxi fares and vigilante work. Missions are picked from the pause menu.
+// S.mission is null or { id, name, step, target, timer, payout, text, progress }.
+
+import { WORLD, clamp, dist, randRange, pick } from './config.js';
+import { addWanted } from './police.js';
+import { spawnTrafficCar } from './vehicle.js';
 
 export const MISSIONS = [
   {
-    id: 'm1', title: 'Welcome Back, Rico', reward: 300,
-    intro: 'Mara: "Rico! You are back in Solmar Bay. My delivery van is stuck at the port — bring it to the safehouse."',
-    steps: [
-      { type: 'goto', x: 2900, y: 2900, label: 'Go to the Harbor Port van', radius: 90 },
-      { type: 'goto', x: 700, y: 700, label: 'Drive the van back to the safehouse', radius: 90, needsCar: true },
-    ],
+    id: 'drive', name: 'First Fare', kind: 'drive',
+    intro: 'Milo: "Rico, you are back behind the wheel. Take the sedan to the beachfront hotel — the client waits."',
+    payout: 200,
+    desc: 'Drive to the beachfront hotel marker.',
   },
   {
-    id: 'm2', title: 'The Getaway Driver', reward: 500,
-    intro: 'Dario: "The crew hit the Bay Bank. Cops are everywhere — grab a fast car and lose the tail, then meet me downtown."',
-    steps: [
-      { type: 'getcar', label: 'Steal a fast car', radius: 0 },
-      { type: 'escape', label: 'Lose the police (get wanted to 0)', radius: 0 },
-      { type: 'goto', x: 1900, y: 1900, label: 'Meet Dario downtown', radius: 90 },
-    ],
+    id: 'chase', name: 'Tail the Courier', kind: 'chase',
+    intro: 'Milo: "A courier is carrying our ledger across town. Stay on his bumper for five seconds — do not lose him."',
+    payout: 350,
+    desc: 'Chase the marked car and stay close for 5 seconds.',
   },
   {
-    id: 'm3', title: 'Harbor Delivery', reward: 450,
-    intro: 'Priya: "A crate at the port has to reach the park bandstand before dark. No questions, no stops."',
-    steps: [
-      { type: 'goto', x: 3100, y: 2700, label: 'Pick up the crate at the port', radius: 90 },
-      { type: 'goto', x: 620, y: 2900, label: 'Deliver the crate to Palm Park', radius: 90, timed: 75 },
-    ],
+    id: 'escape', name: 'Heat Escape', kind: 'escape',
+    intro: 'Milo: "You tripped every alarm in the port. Three stars on you, Rico. Lose the cops and stay free."',
+    payout: 400,
+    desc: 'Lose a 3-star wanted level.',
   },
   {
-    id: 'm4', title: 'The Rival Crew', reward: 700,
-    intro: 'Mara: "The Coral Kings are muscling in on Old Town. Take down their enforcer at the pier — bring a pistol."',
-    steps: [
-      { type: 'goto', x: 120, y: 1500, label: 'Reach the marina pier', radius: 100 },
-      { type: 'takedown', label: 'Take down the Coral Kings enforcer', radius: 0 },
-      { type: 'goto', x: 700, y: 700, label: 'Get back to the safehouse', radius: 90 },
-    ],
+    id: 'delivery', name: 'Bay Delivery', kind: 'delivery',
+    intro: 'Milo: "A package sits at the port warehouse. Pick it up, then run it downtown before the clock dies."',
+    payout: 300,
+    desc: 'Collect the package at the port, deliver it downtown in 90 seconds.',
   },
   {
-    id: 'm5', title: 'The Big Score', reward: 1200,
-    intro: 'Dario: "One last job: the Sunset Casino vault. Grab the cash downtown, then lose a 3-star tail and bring it home."',
-    steps: [
-      { type: 'goto', x: 2000, y: 1600, label: 'Reach the Sunset Casino downtown', radius: 100 },
-      { type: 'escape', label: 'Escape with 3 stars and lose the cops', radius: 0, wantedAtStart: 3 },
-      { type: 'goto', x: 700, y: 700, label: 'Bring the score home', radius: 90 },
-    ],
+    id: 'takedown', name: 'Dock Takedown', kind: 'takedown',
+    intro: 'Milo: "Three of Vane’s thugs are leaning on the dock workers. Put all three down — fists or pistol, your call."',
+    payout: 500,
+    desc: 'Defeat the 3 marked thugs at the port.',
   },
 ];
 
 export const GIGS = [
-  { id: 'taxi', title: 'Taxi Fares', reward: 150, intro: 'Pick up fares around the city and drop them off. Each fare pays $150.' },
-  { id: 'vigilante', title: 'Vigilante', reward: 250, intro: 'A Coral Kings getaway car is loose in the city. Ram it until it blows — $250 if you stop it.' },
+  { id: 'taxi', name: 'Taxi Fare', desc: 'Pick up the fare and drop them off. Pays $80.' },
+  { id: 'vigilante', name: 'Vigilante', desc: 'Chase down the marked getaway car. Pays $150.' },
 ];
 
-export function createMissions() {
-  return { active: null, stepIndex: 0, stepTimer: 0, completed: [], unlocked: 1, dialogue: '', dialogueTimer: 0, target: null, gigState: null };
-}
-
-export function startMission(G, index) {
-  const def = MISSIONS[index];
+/** Start a story mission by id; returns false when one is already running. */
+export function startMission(S, id) {
+  if (S.mission) return false;
+  const def = MISSIONS.find((m) => m.id === id);
   if (!def) return false;
-  if (index + 1 > G.missions.unlocked) { G.banner('Finish the previous mission first.'); return false; }
-  if (G.missions.active) { G.banner('A mission is already running — finish or fail it first.'); return false; }
-  G.missions.active = def;
-  G.missions.stepIndex = 0;
-  G.missions.stepTimer = 0;
-  G.missions.target = null;
-  G.missions.gigState = null;
-  say(G, def.intro);
-  G.audio.mission();
-  G.banner(`Mission started: ${def.title}`);
-  return true;
-}
-
-export function startGig(G, id) {
-  if (G.missions.active) { G.banner('Finish the current mission first.'); return false; }
-  const def = GIGS.find((g) => g.id === id);
-  if (!def) return false;
-  G.missions.active = { id: def.id, title: def.title, reward: def.reward, isGig: true, steps: [{ type: 'gig', label: def.title, radius: 0 }] };
-  G.missions.stepIndex = 0;
-  G.missions.gigState = { phase: 'pickup', timer: 0 };
-  if (id === 'taxi') {
-    // A fare waits at a random road junction; drop-off is another junction.
-    const spots = [[1125, 675], [2025, 1125], [675, 2025], [2475, 1575], [1575, 2475]];
-    const a = spots[Math.floor(Math.random() * spots.length)];
-    let b = spots[Math.floor(Math.random() * spots.length)];
-    while (b === a) b = spots[Math.floor(Math.random() * spots.length)];
-    G.missions.gigState.pickup = { x: a[0], y: a[1] };
-    G.missions.gigState.dropoff = { x: b[0], y: b[1] };
-  } else {
-    // Vigilante target car: a fast getaway car roaming downtown.
-    const car = { x: 1900, y: 1600, angle: 0, speed: 200, health: 60, name: 'Coral Kings Getaway', color: '#8e44ad', driver: 'traffic', parked: false, isPolice: false, exploded: false, smoke: 0, target: { x: 2400, y: 1600, horizontal: true }, stuck: 0, honk: 0, w: 46, h: 22 };
-    G.cars.push(car);
-    G.missions.gigState.targetCar = car;
-  }
-  say(G, def.intro);
-  G.audio.mission();
-  return true;
-}
-
-export function say(G, text) {
-  G.missions.dialogue = text;
-  G.missions.dialogueTimer = 6;
-}
-
-function completeMission(G) {
-  const def = G.missions.active;
-  G.player.cash += def.reward;
-  if (!def.isGig && !G.missions.completed.includes(def.id)) {
-    G.missions.completed.push(def.id);
-    G.missions.unlocked = Math.min(MISSIONS.length, G.missions.unlocked + 1);
-  }
-  G.banner(`Mission complete: ${def.title} — +$${def.reward}`);
-  G.audio.cash();
-  G.missions.active = null;
-  G.missions.target = null;
-  G.missions.gigState = null;
-}
-
-export function failMission(G, reason) {
-  if (!G.missions.active) return;
-  G.banner(`Mission failed: ${reason}`);
-  G.audio.fail();
-  G.missions.active = null;
-  G.missions.target = null;
-  G.missions.gigState = null;
-}
-
-function stepLabel(G) {
-  const m = G.missions;
-  if (!m.active) return '';
-  if (m.active.isGig) {
-    if (m.active.id === 'taxi') return m.gigState.phase === 'pickup' ? 'Pick up the fare' : 'Drop off the fare';
-    return 'Stop the getaway car';
-  }
-  return m.active.steps[m.stepIndex].label;
-}
-
-export function missionObjective(G) {
-  const m = G.missions;
-  if (!m.active) return G.missions.completed.length === MISSIONS.length
-    ? 'All story missions complete — free roam!'
-    : `Next: ${MISSIONS[G.missions.unlocked - 1].title} (P → Missions)`;
-  return `${m.active.title}: ${stepLabel(G)}`;
-}
-
-export function missionMarker(G) {
-  const m = G.missions;
-  if (!m.active) return null;
-  if (m.active.isGig) {
-    if (m.active.id === 'taxi') {
-      const s = m.gigState;
-      return s.phase === 'pickup' ? { x: s.pickup.x, y: s.pickup.y, color: '#f1c40f' } : { x: s.dropoff.x, y: s.dropoff.y, color: '#2ecc71' };
+  const mission = { id: def.id, name: def.name, kind: def.kind, step: 0, timer: 0, payout: def.payout, text: def.intro, progress: 0, target: null };
+  if (def.kind === 'drive') {
+    mission.target = { x: 3150, y: 3150, label: 'Beachfront Hotel' };
+    mission.text = 'Drive to the beachfront hotel.';
+  } else if (def.kind === 'chase') {
+    const car = spawnTrafficCar(S, S.player);
+    car.isTarget = true;
+    car.color = '#e5534b';
+    car.speed = 260;
+    mission.targetCar = car;
+    mission.target = { x: car.x, y: car.y, label: 'Courier' };
+    mission.text = 'Stay on the courier’s bumper.';
+  } else if (def.kind === 'escape') {
+    S.wanted = 3;
+    S.wantedTimer = 0;
+    mission.timer = 60;
+    mission.text = 'Lose the 3-star wanted level!';
+  } else if (def.kind === 'delivery') {
+    mission.target = { x: 3150, y: 450, label: 'Port Warehouse' };
+    mission.text = 'Pick up the package at the port.';
+  } else if (def.kind === 'takedown') {
+    S.thugs = [];
+    for (let i = 0; i < 3; i += 1) {
+      S.thugs.push({
+        x: 3000 + i * 90, y: 500 + (i % 2) * 80, angle: 0, speed: 150,
+        health: 60, state: 'fight', color: '#3a3a3a', isThug: true,
+        dead: false, flee: false, fight: true, punchTimer: 0, tx: 3000, ty: 500,
+      });
     }
-    return m.gigState.targetCar && !m.gigState.targetCar.exploded
-      ? { x: m.gigState.targetCar.x, y: m.gigState.targetCar.y, color: '#e74c3c' } : null;
+    S.stats.thugsDown = 0;
+    mission.target = { x: 3050, y: 540, label: 'Dock Thugs' };
+    mission.text = 'Defeat the 3 thugs at the port. (0/3)';
   }
-  const step = m.active.steps[m.stepIndex];
-  if (step.type === 'goto') return { x: step.x, y: step.y, color: '#f1c40f' };
-  if (step.type === 'takedown' && m.target) return { x: m.target.x, y: m.target.y, color: '#e74c3c' };
-  return null;
+  S.mission = mission;
+  S.objective = mission.text;
+  S.missionDialogue = def.intro;
+  S.missionDialogueT = 6;
+  S.audio.missionDone();
+  return true;
 }
 
-export function updateMissions(G, dt) {
-  const m = G.missions;
-  if (m.dialogueTimer > 0) m.dialogueTimer -= dt;
-  if (!m.active) return;
-  const p = G.player;
-  if (m.active.isGig) {
-    updateGig(G, dt);
+/** Start a side gig by id; returns false when a mission or gig is already running. */
+export function startGig(S, id) {
+  if (S.mission || S.gig) return false;
+  if (id === 'taxi') {
+    const px = clamp(S.player.x + randRange(S.rng, -500, 500), 200, WORLD.size - 200);
+    const py = clamp(S.player.y + randRange(S.rng, -500, 500), 200, WORLD.size - 200);
+    S.gig = { id: 'taxi', step: 0, target: { x: px, y: py, label: 'Fare' }, payout: 80, text: 'Pick up the taxi fare.' };
+    S.peds.push({
+      x: px, y: py, angle: 0, speed: 0, health: 100, state: 'walk',
+      color: '#f2c94c', tx: px, ty: py, name: 'Fare', flee: false, dead: false,
+      fight: false, punchTimer: 0, isFare: true,
+    });
+    S.gig.fare = S.peds[S.peds.length - 1];
+  } else if (id === 'vigilante') {
+    const car = spawnTrafficCar(S, S.player);
+    car.isTarget = true;
+    car.color = '#e5534b';
+    car.speed = 300;
+    S.gig = { id: 'vigilante', step: 0, targetCar: car, target: { x: car.x, y: car.y, label: 'Getaway Car' }, payout: 150, text: 'Stop the getaway car — ram it or shoot it.' };
+  } else return false;
+  S.objective = S.gig.text;
+  return true;
+}
+
+/** Pay out and clear the current mission. */
+function completeMission(S) {
+  const m = S.mission;
+  S.cash += m.payout;
+  S.stats.missionsDone += 1;
+  S.completedMissions.push(m.id);
+  S.message = `Mission complete: ${m.name} — +$${m.payout}.`;
+  S.messageT = 4;
+  S.objective = 'No active mission. Open the pause menu (P) to pick one.';
+  S.audio.missionDone();
+  S.audio.cash();
+  S.mission = null;
+}
+
+/** Fail the current mission with a reason. */
+function failMission(S, reason) {
+  S.message = `Mission failed: ${reason}`;
+  S.messageT = 4;
+  S.objective = 'No active mission. Open the pause menu (P) to pick one.';
+  S.audio.fail();
+  if (S.mission && S.mission.targetCar) S.mission.targetCar.isTarget = false;
+  S.mission = null;
+}
+
+/** Update the active mission or gig for one fixed step. */
+export function updateMissions(S, dt) {
+  const p = S.player;
+  const m = S.mission;
+  if (m) {
+    if (m.kind === 'drive') {
+      if (dist(p.x, p.y, m.target.x, m.target.y) < 90) completeMission(S);
+    } else if (m.kind === 'chase') {
+      const car = m.targetCar;
+      if (!car || car.dead) {
+        failMission(S, 'You lost the courier.');
+      } else {
+        m.target = { x: car.x, y: car.y, label: 'Courier' };
+        const d = dist(p.x, p.y, car.x, car.y);
+        if (d < 110) {
+          m.progress += dt;
+          m.text = `Stay on him… ${m.progress.toFixed(1)}s / 5s`;
+          S.objective = m.text;
+          if (m.progress >= 5) completeMission(S);
+        } else {
+          m.progress = Math.max(0, m.progress - dt);
+          m.text = 'Stay on the courier’s bumper.';
+          S.objective = m.text;
+          if (d > 900) failMission(S, 'The courier got away.');
+        }
+      }
+    } else if (m.kind === 'escape') {
+      m.timer -= dt;
+      m.text = `Lose the cops! ${Math.max(0, Math.ceil(m.timer))}s left.`;
+      S.objective = m.text;
+      if (S.wanted === 0) completeMission(S);
+      else if (m.timer <= 0) failMission(S, 'The cops kept you in their sights.');
+    } else if (m.kind === 'delivery') {
+      if (m.step === 0) {
+        if (dist(p.x, p.y, m.target.x, m.target.y) < 90) {
+          m.step = 1;
+          m.timer = 90;
+          m.target = { x: 1800, y: 1800, label: 'Downtown Drop' };
+          m.text = 'Package collected! Deliver downtown in 90s.';
+          S.objective = m.text;
+          S.message = 'Package collected — go, go!';
+          S.messageT = 2;
+        }
+      } else {
+        m.timer -= dt;
+        m.text = `Deliver downtown — ${Math.max(0, Math.ceil(m.timer))}s left.`;
+        S.objective = m.text;
+        if (dist(p.x, p.y, m.target.x, m.target.y) < 90) completeMission(S);
+        else if (m.timer <= 0) failMission(S, 'The delivery window closed.');
+      }
+    } else if (m.kind === 'takedown') {
+      const down = S.stats.thugsDown;
+      m.text = `Defeat the 3 thugs at the port. (${down}/3)`;
+      S.objective = m.text;
+      if (down >= 3) completeMission(S);
+    }
     return;
   }
-  const step = m.active.steps[m.stepIndex];
-  if (step.timed) {
-    m.stepTimer += dt;
-    if (m.stepTimer > step.timed) { failMission(G, 'Out of time on the delivery.'); return; }
-  }
-  if (step.type === 'goto') {
-    const needCar = step.needsCar && !p.inCar;
-    if (dist2(p.x, p.y, step.x, step.y) < step.radius * step.radius && !needCar) advance(G);
-    else if (needCar && dist2(p.x, p.y, step.x, step.y) < step.radius * step.radius) {
-      say(G, 'You need a car for this — steal one first!');
-    }
-  } else if (step.type === 'getcar') {
-    if (p.inCar) advance(G);
-  } else if (step.type === 'escape') {
-    if (step.wantedAtStart && !step.armed) { G.addWanted(step.wantedAtStart, 'The casino alarm went off!'); step.armed = true; }
-    if (p.wanted === 0) advance(G);
-  } else if (step.type === 'takedown') {
-    if (!m.target) {
-      // Spawn the enforcer near the pier.
-      const enforcer = {
-        x: 200, y: 1500, angle: 0, speed: 60, health: 80, down: false,
-        flee: 0, fleeX: 0, fleeY: 0, fighter: true, attackCooldown: 0,
-        color: '#8e44ad', name: 'Coral Kings Enforcer', targetX: 200, targetY: 1500, retarget: 3,
-      };
-      G.peds.list.push(enforcer);
-      m.target = enforcer;
-      say(G, 'Enforcer: "You picked the wrong pier, Rico."');
-    } else if (m.target.down) {
-      advance(G);
-    }
-  }
-}
 
-function advance(G) {
-  const m = G.missions;
-  m.stepIndex += 1;
-  m.stepTimer = 0;
-  if (m.stepIndex >= m.active.steps.length) completeMission(G);
-  else G.audio.pickup();
-}
-
-function updateGig(G, dt) {
-  const m = G.missions;
-  const p = G.player;
-  const s = m.gigState;
-  if (m.active.id === 'taxi') {
-    if (s.phase === 'pickup') {
-      if (dist2(p.x, p.y, s.pickup.x, s.pickup.y) < 80 * 80 && p.inCar) {
-        s.phase = 'dropoff';
-        say(G, 'Fare: "Downtown, please — and step on it!"');
+  const g = S.gig;
+  if (!g) return;
+  if (g.id === 'taxi') {
+    if (g.step === 0) {
+      if (g.fare && !g.fare.dead && dist(p.x, p.y, g.fare.x, g.fare.y) < 50) {
+        g.step = 1;
+        g.fare.dead = true; // They hop in with Rico.
+        const dx = clamp(p.x + randRange(S.rng, -900, 900), 200, WORLD.size - 200);
+        const dy = clamp(p.y + randRange(S.rng, -900, 900), 200, WORLD.size - 200);
+        g.target = { x: dx, y: dy, label: 'Drop-off' };
+        g.text = 'Drop the fare off at the marker.';
+        S.objective = g.text;
       }
-    } else if (dist2(p.x, p.y, s.dropoff.x, s.dropoff.y) < 80 * 80 && p.inCar) {
-      completeMission(G);
+    } else if (dist(p.x, p.y, g.target.x, g.target.y) < 90) {
+      S.cash += g.payout;
+      S.message = `Taxi fare complete — +$${g.payout}.`;
+      S.messageT = 3;
+      S.objective = 'No active mission. Open the pause menu (P) to pick one.';
+      S.audio.cash();
+      S.gig = null;
     }
-  } else {
-    const car = s.targetCar;
-    if (car && car.exploded) completeMission(G);
-    else if (car) {
-      // The getaway car flees from the player.
-      const away = angleTo(p.x, p.y, car.x, car.y);
-      car.angle = away;
-      car.speed = 260;
-      car.x += Math.cos(car.angle) * car.speed * dt;
-      car.y += Math.sin(car.angle) * car.speed * dt;
+  } else if (g.id === 'vigilante') {
+    const car = g.targetCar;
+    if (!car) { S.gig = null; return; }
+    g.target = { x: car.x, y: car.y, label: 'Getaway Car' };
+    if (car.dead || car.health <= 25) {
+      S.cash += g.payout;
+      S.message = `Vigilante gig done — +$${g.payout}.`;
+      S.messageT = 3;
+      S.objective = 'No active mission. Open the pause menu (P) to pick one.';
+      S.audio.cash();
+      S.gig = null;
+    } else if (dist(p.x, p.y, car.x, car.y) > 1200) {
+      S.message = 'Vigilante gig failed: the car escaped.';
+      S.messageT = 3;
+      S.objective = 'No active mission. Open the pause menu (P) to pick one.';
+      S.gig = null;
     }
   }
 }

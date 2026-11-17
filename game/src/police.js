@@ -1,125 +1,132 @@
-// The wanted system: stars 1-5, police cars and foot cops that spawn, chase,
-// ram and arrest. Lose them by hiding, outrunning them, or paying at the spray shop.
-import { WANTED_MAX, WORLD, clamp, dist2, angleTo, angleDiff } from './config.js';
-import { makeCar } from './vehicle.js';
-import { damagePlayer } from './player.js';
+// The wanted level (1–5 stars) and the police who enforce it: foot officers who
+// chase Rico down and try to arrest him, and cruisers (in vehicle.js) that ram.
+// Heat rises with crimes and falls when Rico hides or outruns the law; Lou's
+// Garage clears it outright.
 
-export function createPolice() {
-  return { cops: [], copCars: [], spawnTimer: 0, hiddenTimer: 0, arrestTimer: 0 };
+import { COP, WORLD, clamp, dist, angleTo, randRange } from './config.js';
+import { spawnCopCar } from './vehicle.js';
+
+/** Raise the wanted level by n stars (capped at 5) and reset the cool-down clock. */
+export function addWanted(S, n) {
+  S.wanted = Math.min(5, S.wanted + n);
+  S.wantedTimer = 0;
+  S.heatTimer = 0;
+  if (S.wanted >= 1) S.audio.sirenBlip();
 }
 
-export function addWanted(G, stars, reason) {
-  const p = G.player;
-  const before = p.wanted;
-  p.wanted = Math.min(WANTED_MAX, p.wanted + stars);
-  p.heat = 1;
-  G.police.hiddenTimer = 0;
-  if (p.wanted > before) {
-    G.banner(`WANTED — ${p.wanted} star${p.wanted > 1 ? 's' : ''}${reason ? ': ' + reason : ''}`);
-    G.audio.siren(true);
-  }
-}
-
-function spawnCopCar(G) {
-  const p = G.player;
-  const angle = Math.random() * Math.PI * 2;
-  const x = clamp(p.x + Math.cos(angle) * 700, 100, WORLD.size - 100);
-  const y = clamp(p.y + Math.sin(angle) * 700, 100, WORLD.size - 100);
-  const car = makeCar(G.rng, x, y, angleTo(x, y, p.x, p.y), { name: 'SBPD Interceptor', color: '#1a1a2e', isPolice: true, driver: 'police' });
-  car.health = 120;
-  G.cars.push(car);
-  G.police.copCars.push(car);
-  return car;
-}
-
-function spawnFootCop(G) {
-  const p = G.player;
-  const angle = Math.random() * Math.PI * 2;
+/** Spawn one foot officer near the player. */
+export function spawnFootCop(S) {
+  const a = randRange(S.rng, 0, Math.PI * 2);
+  const r = randRange(S.rng, 300, 480);
   const cop = {
-    x: clamp(p.x + Math.cos(angle) * 420, 60, WORLD.size - 60),
-    y: clamp(p.y + Math.sin(angle) * 420, 60, WORLD.size - 60),
-    angle: 0, health: 50, down: false, isCop: true, speed: 200,
-    attackCooldown: 0, color: '#1a2a4a', name: 'Officer',
+    x: clamp(S.player.x + Math.cos(a) * r, 60, WORLD.size - 60),
+    y: clamp(S.player.y + Math.sin(a) * r, 60, WORLD.size - 60),
+    angle: 0, speed: randRange(S.rng, 200, 240), health: 40,
+    onFoot: true, isCop: true, dead: false, state: 'chase',
+    punchTimer: 0, arrestTimer: 0, flee: false,
   };
-  G.police.cops.push(cop);
+  S.cops.push(cop);
   return cop;
 }
 
-export function updatePolice(G, dt) {
-  const p = G.player;
-  const pol = G.police;
-  const wanted = p.wanted;
-  G.audio.siren(wanted > 0);
-  if (wanted > 0) G.audio.sirenWail(G.time);
-  if (wanted === 0) {
-    pol.spawnTimer = 0;
-    return;
-  }
-  // Spawn pressure scales with stars.
-  pol.spawnTimer -= dt;
-  const wantCars = Math.min(4, wanted);
-  const wantCops = wanted >= 2 ? Math.min(4, wanted) : 0;
-  if (pol.spawnTimer <= 0) {
-    pol.spawnTimer = Math.max(1.2, 4.5 - wanted * 0.7);
-    if (pol.copCars.filter((c) => !c.exploded).length < wantCars) spawnCopCar(G);
-    if (pol.cops.filter((c) => !c.down).length < wantCops) spawnFootCop(G);
-  }
-  // Police cars chase and ram the player.
-  for (const car of pol.copCars) {
-    if (car.exploded) continue;
-    const want = angleTo(car.x, car.y, p.x, p.y);
-    const diff = angleDiff(want, car.angle);
-    car.angle += clamp(diff, -2.4 * dt, 2.4 * dt);
-    const targetSpeed = p.inCar ? 430 : 300;
-    car.speed += (targetSpeed - car.speed) * dt;
-    car.x += Math.cos(car.angle) * car.speed * dt;
-    car.y += Math.sin(car.angle) * car.speed * dt;
-    // Ram: hitting the player's car damages it; hitting the player on foot hurts.
-    if (dist2(car.x, car.y, p.x, p.y) < 46 * 46) {
-      if (p.inCar) {
-        p.inCar.health -= 14 * dt * 10;
-        if (p.inCar.health <= 0) { /* explodeCar handles the bail-out */ }
-      } else {
-        damagePlayer(G, 12 * dt * 10);
+/** Update the wanted level and every foot officer for one fixed step. */
+export function updatePolice(S, dt) {
+  const p = S.player;
+  // Wanted decay: if no cop can see Rico for a while, the heat cools off.
+  if (S.wanted > 0) {
+    let nearestCop = Infinity;
+    for (const cop of S.cops) if (!cop.dead) nearestCop = Math.min(nearestCop, dist(cop.x, cop.y, p.x, p.y));
+    for (const car of S.cars) if (car.cop && !car.dead) nearestCop = Math.min(nearestCop, dist(car.x, car.y, p.x, p.y));
+    const hidden = nearestCop > 520;
+    const speedingAway = p.car && Math.abs(p.car.speed) > 320;
+    if (hidden || speedingAway) {
+      S.wantedTimer += dt;
+      if (S.wantedTimer > 9) {
+        S.wanted -= 1;
+        S.wantedTimer = 0;
+        S.message = S.wanted === 0 ? 'You lost them. Clean.' : 'Heat is cooling off…';
+        S.messageT = 2;
+        if (S.wanted === 0) S.audio.siren(false);
       }
+    } else {
+      S.wantedTimer = 0;
     }
   }
-  // Foot cops chase and try to arrest (touch = busted when the player is weak/slow).
-  for (const cop of pol.cops) {
-    if (cop.down) continue;
-    if (cop.attackCooldown > 0) cop.attackCooldown -= dt;
-    const d = dist2(cop.x, cop.y, p.x, p.y);
-    if (d > 900 * 900) { cop.down = true; continue; } // lost the trail
-    cop.angle = angleTo(cop.x, cop.y, p.x, p.y);
-    cop.x += Math.cos(cop.angle) * cop.speed * dt;
-    cop.y += Math.sin(cop.angle) * cop.speed * dt;
-    if (d < 26 * 26 && cop.attackCooldown <= 0) {
-      cop.attackCooldown = 1;
-      if (p.inCar) {
-        p.inCar.health -= 8;
-      } else {
-        damagePlayer(G, 10);
-        G.banner('A cop is grabbing you — run!');
-      }
+
+  // Lou's Garage: drive in with a car and the wanted level is wiped.
+  const g = S.garage;
+  if (S.wanted > 0 && !p.onFoot && p.car) {
+    if (p.x > g.x - 20 && p.x < g.x + g.w + 20 && p.y > g.y - 20 && p.y < g.y + g.h + 20) {
+      S.wanted = 0;
+      S.wantedTimer = 0;
+      S.cash = Math.max(0, S.cash - 50);
+      S.message = "Lou's Garage: paint job done, heat gone. -$50.";
+      S.messageT = 3;
+      S.audio.cash();
+      S.audio.siren(false);
+      // The pursuing cruisers give up and drive off.
+      for (const car of S.cars) if (car.cop) car.dead = true;
+      for (const cop of S.cops) cop.dead = true;
     }
   }
-  pol.copCars = pol.copCars.filter((c) => !c.exploded);
-  pol.cops = pol.cops.filter((c) => !c.down);
-  // Cool down: if no cop is near for a while, stars decay one at a time.
-  const nearest = Math.min(
-    ...pol.copCars.map((c) => dist2(c.x, c.y, p.x, p.y)),
-    ...pol.cops.map((c) => dist2(c.x, c.y, p.x, p.y)),
-    Infinity,
-  );
-  if (nearest > 520 * 520) {
-    pol.hiddenTimer += dt;
-    if (pol.hiddenTimer > 9) {
-      pol.hiddenTimer = 0;
-      p.wanted -= 1;
-      G.banner(p.wanted > 0 ? `Heat cooling off… ${p.wanted} star${p.wanted > 1 ? 's' : ''} left.` : 'You lost the cops. Clean.');
-      if (p.wanted === 0) G.audio.siren(false);
+
+  // Spawn to match the wanted level: cruisers plus foot officers.
+  if (S.wanted > 0) {
+    S.audio.siren(true);
+    const wantCars = Math.min(COP.maxCars, Math.ceil(S.wanted / 2) + (S.wanted >= 4 ? 1 : 0));
+    const liveCars = S.cars.filter((c) => c.cop && !c.dead).length;
+    S.copSpawnTimer -= dt;
+    if (liveCars < wantCars && S.copSpawnTimer <= 0) {
+      spawnCopCar(S);
+      S.copSpawnTimer = 2.5;
+    }
+    const wantFoot = Math.min(COP.maxFoot, S.wanted + 1);
+    const liveFoot = S.cops.filter((c) => !c.dead).length;
+    if (liveFoot < wantFoot && S.copSpawnTimer <= 0) {
+      spawnFootCop(S);
+      S.copSpawnTimer = 2.5;
     }
   } else {
-    pol.hiddenTimer = 0;
+    S.audio.siren(false);
   }
+
+  // Foot officers: run Rico down; up close they try to arrest him.
+  for (const cop of S.cops) {
+    if (cop.dead) continue;
+    if (cop.punchTimer > 0) cop.punchTimer -= dt;
+    const d = dist(cop.x, cop.y, p.x, p.y);
+    if (d > 900) {
+      // Too far behind: teleport the officer closer, as if backup arrived.
+      const a = randRange(S.rng, 0, Math.PI * 2);
+      cop.x = clamp(p.x + Math.cos(a) * 420, 60, WORLD.size - 60);
+      cop.y = clamp(p.y + Math.sin(a) * 420, 60, WORLD.size - 60);
+      continue;
+    }
+    const a = angleTo(cop.x, cop.y, p.x, p.y);
+    cop.angle = a;
+    if (d > 34) {
+      cop.x = clamp(cop.x + Math.cos(a) * cop.speed * dt, 40, WORLD.size - 40);
+      cop.y = clamp(cop.y + Math.sin(a) * cop.speed * dt, 40, WORLD.size - 40);
+      cop.arrestTimer = 0;
+    } else if (p.onFoot) {
+      // Arrest: hold Rico for two seconds and the run ends in cuffs.
+      cop.arrestTimer += dt;
+      S.message = 'The cops are cuffing you — break free! (move!)';
+      S.messageT = 0.5;
+      if (p.moving) cop.arrestTimer -= dt * 2;
+      if (cop.arrestTimer > 2) {
+        p.health = 0;
+        S.screen = 'over';
+        S.overReason = 'Busted by the Solmar Bay police.';
+      }
+    } else if (cop.punchTimer <= 0) {
+      // Rico is in a car: the officer yanks at the door and dents it.
+      cop.punchTimer = 0.8;
+      if (p.car) {
+        p.car.health -= 6;
+        p.car.speed *= 0.9;
+      }
+    }
+  }
+  S.cops = S.cops.filter((c) => !c.dead || dist(c.x, c.y, p.x, p.y) < 1200);
 }

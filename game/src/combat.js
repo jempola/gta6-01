@@ -1,87 +1,167 @@
-// Combat: pistol shots (mouse aim), bullets, fists via the player module, and
-// pickups scattered around the city (pistol, ammo, health, armor).
-import { dist2, angleTo, TAU } from './config.js';
-import { scarePeds } from './ped.js';
-import { damageCar } from './vehicle.js';
+// Combat: the pistol pickup, shooting with mouse aim, bullets, and the health,
+// armor and cash pickups scattered around the city. Fists live in player.js.
 
-export function spawnPickups(G) {
-  G.pickups = [
-    { kind: 'pistol', x: 760, y: 760, taken: false },
-    { kind: 'pistol', x: 1900, y: 1150, taken: false },
-    { kind: 'health', x: 1150, y: 2000, taken: false },
-    { kind: 'health', x: 2500, y: 1200, taken: false },
-    { kind: 'health', x: 700, y: 3000, taken: false },
-    { kind: 'ammo', x: 1600, y: 2000, taken: false },
-    { kind: 'ammo', x: 2900, y: 1600, taken: false },
-    { kind: 'armor', x: 2050, y: 2050, taken: false },
-    { kind: 'armor', x: 900, y: 1150, taken: false },
+import { BULLET, PLAYER, WORLD, clamp, dist, randRange, pick } from './config.js';
+import { addWanted } from './police.js';
+import { explodeCar } from './vehicle.js';
+
+/** Spawn the starting pickups around the city. */
+export function spawnPickups(S) {
+  const rng = S.rng;
+  const spots = [
+    { x: 2025, y: 1800, kind: 'pistol' },
+    { x: 1125, y: 1125, kind: 'health' },
+    { x: 2475, y: 2475, kind: 'health' },
+    { x: 675, y: 2925, kind: 'armor' },
+    { x: 2925, y: 675, kind: 'armor' },
+    { x: 1575, y: 675, kind: 'health' },
+    { x: 3375, y: 1575, kind: 'pistol' },
+    { x: 675, y: 1575, kind: 'cash' },
   ];
-  G.bullets = [];
+  for (const s of spots) {
+    S.pickups.push({ x: s.x, y: s.y, kind: s.kind, taken: false, bob: rng() * Math.PI * 2 });
+  }
+  // A few extra cash drops on the beach front.
+  for (let i = 0; i < 6; i += 1) {
+    S.pickups.push({ x: randRange(rng, 300, 3300), y: randRange(rng, 2850, 3400), kind: 'cash', taken: false, bob: rng() * Math.PI * 2 });
+  }
 }
 
-export function shoot(G) {
-  const p = G.player;
-  if (p.inCar || p.weapon !== 'pistol' || p.ammo <= 0) return;
-  if (p.shootCooldown > 0) return;
-  p.shootCooldown = 0.22;
-  p.ammo -= 1;
-  const angle = p.angle;
-  G.bullets.push({
-    x: p.x + Math.cos(angle) * 22, y: p.y + Math.sin(angle) * 22,
-    vx: Math.cos(angle) * 900, vy: Math.sin(angle) * 900, life: 0.7, damage: 25,
+/** Fire one bullet from the player toward the mouse world point. */
+export function shoot(S, mouseWorld) {
+  const p = S.player;
+  if (S.weapon !== 'pistol') return false;
+  if (S.ammo <= 0) {
+    S.message = 'Out of ammo — find a pistol pickup.';
+    S.messageT = 1.5;
+    return false;
+  }
+  if (S.shootCooldown > 0) return false;
+  S.shootCooldown = 0.22;
+  S.ammo -= 1;
+  S.stats.shots += 1;
+  const ox = p.x + Math.cos(p.angle) * 20;
+  const oy = p.y + Math.sin(p.angle) * 20;
+  const a = Math.atan2(mouseWorld.y - p.y, mouseWorld.x - p.x);
+  S.bullets.push({ x: ox, y: oy, vx: Math.cos(a) * BULLET.speed, vy: Math.sin(a) * BULLET.speed, life: BULLET.life, fromPlayer: true });
+  S.audio.shot();
+  S.recentShot = 0.6;
+  // Muzzle flash particle.
+  S.particles.push({
+    x: ox, y: oy, vx: Math.cos(a) * 40, vy: Math.sin(a) * 40,
+    life: 0.08, maxLife: 0.08, color: '#ffd94f', size: 9, kind: 'flash',
   });
-  G.particles.push({ x: p.x + Math.cos(angle) * 26, y: p.y + Math.sin(angle) * 26, vx: 0, vy: 0, life: 0.12, max: 0.12, color: '#ffd94a', size: 8 });
-  G.audio.shot();
-  scarePeds(G, p.x, p.y, 320);
-  G.addWanted(0, ''); // no-op keep
-  // Firing a gun in public draws attention.
-  if (Math.random() < 0.5) G.addWanted(1, 'Gunfire heard');
+  return true;
 }
 
-export function updateBullets(G, dt) {
-  const p = G.player;
-  if (p.shootCooldown > 0) p.shootCooldown -= dt;
-  for (const b of G.bullets) {
-    b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+/** Apply a bullet hit to a target entity; returns true when it died. */
+function hitTarget(S, t, dmg) {
+  t.health -= dmg;
+  if (t.health <= 0) {
+    t.dead = true;
+    S.stats.kills += 1;
+    if (t.isThug) {
+      S.stats.thugsDown += 1;
+      S.cash += 25;
+    }
+    return true;
+  }
+  if (t.state) t.state = 'flee';
+  t.flee = true;
+  return false;
+}
+
+/** Update bullets, pickups and the shooting cooldown for one fixed step. */
+export function updateCombat(S, dt) {
+  if (S.shootCooldown > 0) S.shootCooldown -= dt;
+  if (S.recentShot > 0) S.recentShot -= dt;
+  const p = S.player;
+
+  for (const b of S.bullets) {
     if (b.life <= 0) continue;
-    // Hit a ped / cop.
-    for (const t of [...G.peds.list, ...G.police.cops]) {
-      if (t.down) continue;
-      if (dist2(b.x, b.y, t.x, t.y) < 18 * 18) {
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.life -= dt;
+    // Buildings stop bullets.
+    let blocked = false;
+    for (const bd of S.buildings) {
+      if (b.x > bd.x && b.x < bd.x + bd.w && b.y > bd.y && b.y < bd.y + bd.h) { blocked = true; break; }
+    }
+    if (blocked || b.x < 0 || b.x > WORLD.size || b.y < 0 || b.y > WORLD.size) {
+      b.life = 0;
+      S.particles.push({ x: b.x, y: b.y, vx: 0, vy: 0, life: 0.15, maxLife: 0.15, color: '#cccccc', size: 3, kind: 'spark' });
+      continue;
+    }
+    // Hit a pedestrian, cop or thug.
+    let done = false;
+    const victims = [];
+    for (const ped of S.peds) if (!ped.dead) victims.push(ped);
+    for (const cop of S.cops) if (!cop.dead) victims.push(cop);
+    for (const thug of S.thugs || []) if (!thug.dead) victims.push(thug);
+    for (const v of victims) {
+      if (dist(b.x, b.y, v.x, v.y) < 18) {
+        const died = hitTarget(S, v, BULLET.damage);
+        S.stats.hits += 1;
+        if (v.isCop) addWanted(S, 1);
+        else if (died) addWanted(S, 1);
         b.life = 0;
-        t.health -= b.damage;
-        if (t.health <= 0) {
-          t.down = true;
-          G.addWanted(1, t.isCop ? 'Shot a police officer' : 'Shot a pedestrian');
-        } else if (t.flee !== undefined) {
-          t.flee = 3; t.fleeX = p.x; t.fleeY = p.y;
+        done = true;
+        break;
+      }
+    }
+    if (done) continue;
+    // Hit a car.
+    for (const car of S.cars) {
+      if (car.dead) continue;
+      if (dist(b.x, b.y, car.x, car.y) < 26) {
+        car.health -= BULLET.damage;
+        S.stats.hits += 1;
+        b.life = 0;
+        if (car.health <= 25 && !car.dead) {
+          // Heavy damage: the car catches fire and blows.
+          explodeCar(S, car);
         }
         break;
       }
     }
-    if (b.life <= 0) continue;
-    // Hit a car.
-    for (const car of G.cars) {
-      if (car.exploded) continue;
-      if (dist2(b.x, b.y, car.x, car.y) < 28 * 28) {
-        b.life = 0;
-        damageCar(G, car, b.damage);
-        if (car.driver === 'traffic') G.addWanted(1, 'Shot at traffic');
-        break;
+  }
+  S.bullets = S.bullets.filter((b) => b.life > 0);
+
+  // Pickups: walk over one to collect it.
+  for (const pk of S.pickups) {
+    if (pk.taken) continue;
+    pk.bob += dt * 3;
+    if (dist(p.x, p.y, pk.x, pk.y) < 30) {
+      pk.taken = true;
+      if (pk.kind === 'pistol') {
+        S.weapon = 'pistol';
+        S.ammo += 24;
+        S.message = 'Pistol picked up — 24 rounds. Click to shoot.';
+      } else if (pk.kind === 'health') {
+        p.health = clamp(p.health + 50, 0, PLAYER.maxHealth);
+        S.message = 'Health pack: +50 HP.';
+      } else if (pk.kind === 'armor') {
+        p.armor = clamp(p.armor + 50, 0, PLAYER.maxArmor);
+        S.message = 'Armor vest: +50 armor.';
+      } else if (pk.kind === 'cash') {
+        const amount = pick(S.rng, [20, 40, 60]);
+        S.cash += amount;
+        S.message = `Found $${amount} on the street.`;
+        S.audio.cash();
       }
+      if (pk.kind !== 'cash') S.audio.pickup();
+      S.messageT = 2;
     }
   }
-  G.bullets = G.bullets.filter((b) => b.life > 0);
-  // Pickups.
-  for (const pk of G.pickups) {
-    if (pk.taken) continue;
-    if (dist2(p.x, p.y, pk.x, pk.y) < 30 * 30) {
-      pk.taken = true;
-      G.audio.pickup();
-      if (pk.kind === 'pistol') { p.weapon = 'pistol'; p.ammo = Math.max(p.ammo, 24); G.banner('Picked up a pistol! Aim with the mouse, click to shoot. Press R to reload (needs ammo).'); }
-      else if (pk.kind === 'ammo') { p.ammo += 24; G.banner('Picked up ammo (+24).'); }
-      else if (pk.kind === 'health') { p.health = Math.min(100, p.health + 40); G.banner('Health pack (+40).'); }
-      else if (pk.kind === 'armor') { p.armor = Math.min(100, p.armor + 50); G.banner('Body armor (+50).'); }
+  // A fresh health pack respawns now and then so the city never runs dry.
+  S.pickupTimer -= dt;
+  if (S.pickupTimer <= 0) {
+    S.pickupTimer = 25;
+    const taken = S.pickups.find((pk) => pk.taken);
+    if (taken) {
+      taken.taken = false;
+      taken.x = clamp(p.x + randRange(S.rng, -500, 500), 100, WORLD.size - 100);
+      taken.y = clamp(p.y + randRange(S.rng, -500, 500), 100, WORLD.size - 100);
     }
   }
 }

@@ -1,79 +1,71 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// Screenshot scenes behind ?shot=cover|combat|mission|dusk. Each one stages a real
+// game state (real systems, real HUD, real minimap) and then steps the world
+// forward a few seconds so traffic, police and particles are mid-action.
+import { startMission, startGig } from './missions.js';
+import { addWanted } from './police.js';
+import { makeCar } from './vehicle.js';
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
-
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
+function placeDowntownChase(G) {
+  const p = G.player;
+  p.x = 1900; p.y = 1575; p.angle = 0;
+  const car = makeCar(G.rng, 1900, 1575, 0, { name: 'Sunset GT', color: '#c0392b', driver: 'player', parked: false });
+  car.speed = 320;
+  G.cars.push(car);
+  p.inCar = car;
+  // Traffic around the chase.
+  for (let i = 0; i < 5; i += 1) {
+    const c = makeCar(G.rng, 1700 + i * 120, 1575 + (i % 2 ? 30 : -30), 0, { driver: 'traffic' });
+    c.speed = 150;
+    G.cars.push(c);
   }
-  return Infinity;
+  addWanted(G, 3, 'Downtown chase');
+  G.missions.active = null;
+  G.banner('WANTED — 3 stars: Downtown chase');
 }
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
-  }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
+export function stageShot(name, G) {
+  G.screen = 'play';
+  G.timeOfDay = name === 'dusk' ? 'dusk' : 'day';
+  if (name === 'cover') {
+    placeDowntownChase(G);
+    startMission(G, 1); // "The Getaway Driver" — objective tracker + marker visible
+    G.missions.dialogue = 'Dario: "The crew hit the Bay Bank. Cops are everywhere — lose the tail!"';
+    G.missions.dialogueTimer = 99;
+  } else if (name === 'combat') {
+    const p = G.player;
+    p.x = 1125; p.y = 1125; p.weapon = 'pistol'; p.ammo = 24; p.angle = 0.4;
+    // A couple of hostile peds right in front, mid-fight.
+    for (const ped of G.peds.list.slice(0, 3)) {
+      ped.x = 1160 + Math.random() * 60; ped.y = 1150 + Math.random() * 60;
+      ped.fighter = true; ped.flee = 0;
     }
+    G.bullets.push({ x: p.x + 40, y: p.y + 10, vx: 900, vy: 200, life: 0.3, damage: 25 });
+    G.particles.push({ x: p.x + 30, y: p.y + 8, vx: 0, vy: 0, life: 0.2, max: 0.2, color: '#ffd94a', size: 9 });
+    addWanted(G, 2, 'Gunfire in Old Town');
+    G.banner('On-foot combat — pistol out, aim with the mouse');
+  } else if (name === 'mission') {
+    startMission(G, 0);
+    const p = G.player;
+    p.x = 1125; p.y = 900;
+    // Parked on the road (x=1125 is a road centre line), facing down the street.
+    const car = makeCar(G.rng, 1125, 900, Math.PI / 2, { name: 'Bay Runner', color: '#2980b9', driver: 'player', parked: false });
+    car.speed = 200;
+    G.cars.push(car);
+    p.inCar = car;
+    G.missions.dialogue = 'Mara: "My delivery van is stuck at the port — bring it to the safehouse."';
+    G.missions.dialogueTimer = 99;
+  } else if (name === 'dusk') {
+    placeDowntownChase(G);
+    G.timeOfDay = 'dusk';
+    startMission(G, 1); // "The Getaway Driver" — objective tracker + dialogue visible
+    G.missions.dialogue = 'Dario: "Lose the tail before dark — the sun is going down on us!"';
+    G.missions.dialogueTimer = 99;
+    G.banner('Dusk escape — lose the tail before dark');
   }
-  return best;
-}
-
-/**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
-  }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
-  }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
+  // Step the world forward so police close in and particles fly.
+  const drive = { axis: () => ({ x: 0, y: -1 }), running: () => false };
+  for (let i = 0; i < 90; i += 1) G.stepWorld(1 / 60, drive);
+  G.camera.x = G.player.x; G.camera.y = G.player.y;
+  G.toastTimer = 0;
+  return { screen: 'play' };
 }
